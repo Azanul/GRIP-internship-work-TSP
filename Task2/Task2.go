@@ -5,62 +5,50 @@ import (
 	"log"
 	"math"
 	"os"
+	"strconv"
 
 	"github.com/go-gota/gota/dataframe"
-	"github.com/muesli/clusters"
-	"github.com/muesli/kmeans"
+	"github.com/go-gota/gota/series"
+	"github.com/sajari/regression"
 	"gonum.org/v1/plot"
 	"gonum.org/v1/plot/plotter"
 	"gonum.org/v1/plot/vg"
 )
 
-type centroid []float64
-
 func main() {
-	// Pull in the CSV file.
-	irisFile, err := os.Open("Task2/iris.csv")
+	f, err := os.Open("Task1/student_scores - student_scores.csv")
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer irisFile.Close()
+	defer f.Close()
 
-	// Create a dataframe from the CSV file.
-	irisDF := dataframe.ReadCSV(irisFile)
-	fmt.Print(irisDF.Describe())
+	studentDF := dataframe.ReadCSV(f)
 
-	var d clusters.Observations
-	for row := 0; row < 150; row++ {
-		var temp = []float64{0, 0, 0, 0}
-		for i, col := range []string{"SepalLengthCm", "SepalWidthCm", "PetalLengthCm", "PetalWidthCm"} {
-			temp[i] = irisDF.Col(col).Float()[row]
-		}
-		d = append(d, clusters.Coordinates{temp[0], temp[1], temp[2], temp[3]})
-	}
+	// Describe the read dataframe
+	fmt.Println(studentDF.Describe())
 
-	km := kmeans.New()
-	scores, k, score, err := EstimateK(d, 8, km)
-	fmt.Print("\nOptimum no. of clusters: ", k, "\n")
-	fmt.Print("Best Silhouette score: ", score, "\n")
-	fmt.Print("Although optimum no. of clusters according to the analysis is 2, \n" +
-		"we know that 3 clusters is the corect response and its silhoette score is \n" +
-		"also greater than 0.7. This happens because k-means clustering does not always \n" +
-		"converge optimally.")
+	// Create a Scatter plot for the dataframe for
+	// visual evaluation.
+	// Assign X & Y columns for the plot
+	yVals := studentDF.Col("Scores").Float()
+	colName := "Hours"
 
 	// pts will hold the values for plotting
-	pts := make(plotter.XYs, 8)
+	pts := make(plotter.XYs, studentDF.Nrow())
 
 	// Fill pts with data.
-	for i, floatVal := range scores {
-		pts[i].X = float64(floatVal.K)
-		pts[i].Y = floatVal.Score
+	for i, floatVal := range studentDF.Col(colName).Float() {
+		pts[i].X = floatVal
+		pts[i].Y = yVals[i]
 	}
+
 	// Create the plot.
 	p, err := plot.New()
 	if err != nil {
 		log.Fatal(err)
 	}
-	p.X.Label.Text = "No. of Clusters"
-	p.Y.Label.Text = "Silhouette Scores"
+	p.X.Label.Text = colName
+	p.Y.Label.Text = "Scores"
 	p.Add(plotter.NewGrid())
 	s, err := plotter.NewScatter(pts)
 	if err != nil {
@@ -70,80 +58,129 @@ func main() {
 
 	// Save the plot to a PNG file.
 	p.Add(s)
-	if err := p.Save(4*vg.Inch, 4*vg.Inch, "Task2/Silhouette Scores vs No. of Clusters.png"); err != nil {
+	if err := p.Save(4*vg.Inch, 4*vg.Inch, "Task1/Hours V Scores.png"); err != nil {
 		log.Fatal(err)
 	}
-}
 
-// KScore holds the score for a value of K
-type KScore struct {
-	K     int
-	Score float64
-}
-
-// Partitioner interface which suitable clustering algorithms should implement
-type Partitioner interface {
-	Partition(data clusters.Observations, k int) (clusters.Clusters, error)
-}
-
-// Score calculates the silhouette score for a given value of k, using the given
-// partitioning algorithm
-func Score(data clusters.Observations, k int, m Partitioner) (float64, error) {
-	cc, err := m.Partition(data, k)
-	if err != nil {
-		return -1.0, err
+	// Train-Test Split
+	// Calculate the number of elements in each set.
+	trainingNum := (4 * studentDF.Nrow()) / 5
+	testNum := studentDF.Nrow() / 5
+	if trainingNum+testNum < studentDF.Nrow() {
+		trainingNum++
 	}
 
-	var si float64
-	var sc int64
-	for ci, c := range cc {
-		for _, p := range c.Observations {
-			ai := clusters.AverageDistance(p, c.Observations)
-			_, bi := cc.Neighbour(p, ci)
+	// Create the subset indices.
+	trainingIdx := make([]int, trainingNum)
+	testIdx := make([]int, testNum)
 
-			si += (bi - ai) / math.Max(ai, bi)
-			sc++
+	// Enumerate the training & testing indices.
+	for i := 0; i < trainingNum; i++ {
+		trainingIdx[i] = i
+	}
+	for i := 0; i < testNum; i++ {
+		testIdx[i] = trainingNum + i
+	}
+
+	// Create the subset dataframes.
+	trainingDF := studentDF.Subset(trainingIdx)
+	testDF := studentDF.Subset(testIdx)
+
+	// In this case we are going to try and model our Scores (y)
+	// by the Hours plus an intercept. As such, create
+	// the struct needed to train a model using github.com/sajari/regression.
+	var r regression.Regression
+	r.SetObserved("Scores")
+	r.SetVar(0, "Hours")
+
+	// Loop of records in the CSV, adding the training data to the regression value.
+	for i, record := range trainingDF.Records() {
+
+		// Skip the header.
+		if i == 0 {
+			continue
 		}
-	}
 
-	return si / float64(sc), nil
-}
-
-// Scores calculates the silhouette scores for all values of k between 2 and
-// kmax, using the given partitioning algorithm
-func silhouetteScores(data clusters.Observations, kmax int, m Partitioner) ([]KScore, error) {
-	var r []KScore
-
-	for k := 2; k <= kmax; k++ {
-		s, err := Score(data, k, m)
+		// Parse the Scores regression measure, or "y".
+		yVal, err := strconv.ParseFloat(record[1], 64)
 		if err != nil {
-			return r, err
+			log.Fatal(err)
 		}
 
-		r = append(r, KScore{
-			K:     k,
-			Score: s,
-		})
-	}
-
-	return r, nil
-}
-
-// EstimateK estimates the amount of clusters (k) along with the silhouette
-// score for that value, using the given partitioning algorithm
-func EstimateK(data clusters.Observations, kmax int, m Partitioner) ([]KScore, int, float64, error) {
-	scores, err := silhouetteScores(data, kmax, m)
-	if err != nil {
-		return []KScore{}, 0, -1.0, err
-	}
-
-	r := KScore{
-		K: -1,
-	}
-	for _, score := range scores {
-		if r.K < 0 || score.Score > r.Score {
-			r = score
+		// Parse the Hours value.
+		tvVal, err := strconv.ParseFloat(record[0], 64)
+		if err != nil {
+			log.Fatal(err)
 		}
+
+		// Add these points to the regression value.
+		r.Train(regression.DataPoint(yVal, []float64{tvVal}))
 	}
-	return scores, r.K, r.Score, nil
+
+	// Train/fit the regression model.
+	r.Run()
+	// Output the trained model parameters.
+	fmt.Printf("\nRegression Formula:\n%v\n\n", r.Formula)
+
+	// Loop over the test data predicting y and evaluating the prediction
+	// with the mean absolute error while creating a dataframe for
+	// the predicted values for comparision with observed ones.
+	var mAE float64
+	var predicted, observed []float64
+	for i, record := range testDF.Records() {
+
+		// Skip the header.
+		if i == 0 {
+			continue
+		}
+
+		// Parse the observed Scores, or "y".
+		yObserved, err := strconv.ParseFloat(record[1], 64)
+		if err != nil {
+			log.Fatal(err)
+		}
+		observed = append(observed, yObserved)
+
+		// Parse the Hours value.
+		tvVal, err := strconv.ParseFloat(record[0], 64)
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		// Predict y with our trained model.
+		yPredicted, err := r.Predict([]float64{tvVal})
+
+		predicted = append(predicted, yPredicted)
+		// Add the to the mean absolute error.
+		mAE += math.Abs(yObserved-yPredicted) / float64(len(testDF.Records()))
+	}
+	predDF := dataframe.New(
+		series.New(observed, series.Int, "Observed"),
+		series.New(predicted, series.Float, "Predicted"),
+	)
+	fmt.Println(predDF)
+	// Output the MAE to standard out.
+	fmt.Printf("MAE = %0.2f\n\n", mAE)
+
+	// Define the prediction function
+	// predict := func (x float64) float64 { return 3.0313 + x*9.5204 }
+
+	// Create the regression line
+	line := plotter.NewFunction(func(x float64) float64 {
+		res, _ := r.Predict([]float64{x})
+		return res
+	})
+
+	plotter.DefaultLineStyle.Width = vg.Points(1)
+	plotter.DefaultGlyphStyle.Radius = vg.Points(2)
+
+	p.Add(s, line)
+	if err := p.Save(4*vg.Inch, 4*vg.Inch, "Task1/Regression Line.png"); err != nil {
+		log.Fatal(err)
+	}
+
+	finalScore, _ := r.Predict([]float64{9.25})
+	fmt.Printf("a student studied for 9.25 hrs his score will be %f", finalScore)
+	// We could obtain an even more accurate value by replace 'trainingDF' with 'studentDF' in
+	// line 97. Since it would give more training data to the model.
 }

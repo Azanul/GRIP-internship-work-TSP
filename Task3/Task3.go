@@ -4,159 +4,146 @@ import (
 	"fmt"
 	"log"
 	"math"
-	"math/rand"
-	"net/http"
 	"os"
-	"path"
 
-	"github.com/go-echarts/go-echarts/charts"
 	"github.com/go-gota/gota/dataframe"
-	"github.com/sjwhitworth/golearn/base"
-	"github.com/sjwhitworth/golearn/evaluation"
-	"github.com/sjwhitworth/golearn/trees"
+	"github.com/muesli/clusters"
+	"github.com/muesli/kmeans"
+	"gonum.org/v1/plot"
+	"gonum.org/v1/plot/plotter"
+	"gonum.org/v1/plot/vg"
 )
 
-var tree *trees.ID3DecisionTree
+type centroid []float64
 
 func main() {
-	// Open the CSV file.
-	irisFile, err := os.Open("Task3/Iris.csv")
+	// Pull in the CSV file.
+	irisFile, err := os.Open("Task2/iris.csv")
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer irisFile.Close()
 
 	// Create a dataframe from the CSV file.
-	// The types of the columns will be inferred.
 	irisDF := dataframe.ReadCSV(irisFile)
+	fmt.Print(irisDF.Describe())
 
-	//Write the modified csv to disk.
-	f, err := os.Create("Task3/Iris-mod.csv")
-	if err != nil {
-		log.Fatal(err)
-	}
-	irisDF.Select([]int{1, 2, 3, 4}).WriteCSV(f)
-
-	// Read in the iris data set into golearn "instances".
-	irisData, err := base.ParseCSVToInstances("Task3/Iris-mod.csv", true)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	fmt.Print(irisData)
-	// This is to seed the random processes involved in building the
-	// decision tree.
-	rand.Seed(44111342)
-
-	// We will use the ID3 algorithm to build our decision tree.  Also, we
-	// will start with a parameter of 0.6 that controls the train-prune split.
-	tree = trees.NewID3DecisionTree(0.6)
-
-	// Use cross-fold validation to successively train and evaluate the model
-	// on 5 folds of the data set.
-	cv, err := evaluation.GenerateCrossFoldValidationConfusionMatrices(irisData, tree, 5)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	// Get the mean, variance and standard deviation of the accuracy for the
-	// cross validation.
-	mean, variance := evaluation.GetCrossValidatedMetric(cv, evaluation.GetAccuracy)
-	stdev := math.Sqrt(variance) // Output the cross metrics to standard out.
-	fmt.Printf("\nAccuracy\n%.2f (+/- %.2f)\n\n", mean, stdev*2)
-
-	fmt.Println(tree.Root.SplitRule.String())
-
-	//Simple approach for small tree
-	var graphNodes = []charts.GraphNode{
-		{Name: tree.Root.SplitRule.String()},
-		{Name: "DecisionTreeRule(SepalWidthCm <= 3.050000)"},
-		{Name: "Leaf 1"},
-		{Name: "Leaf 2"},
-	}
-
-	// DFS approach
-	// var queue = []*trees.DecisionTreeNode{tree.Root}
-	// for len(queue) > 0 {
-	// 	curr := queue[0]
-	// 	queue = queue[1:]
-	// 	for _, child := range curr.Children {
-	// 		fmt.Println("0", child)
-	// 		if child.SplitRule.SplitAttr != nil {
-	// 			fmt.Println("77", child)
-	// 			queue = append(queue, child)
-	// 			graphNodes = append(graphNodes, charts.GraphNode{Name: child.SplitRule.String()})
-	// 		} else {
-	// 			graphNodes = append(graphNodes, charts.GraphNode{Name: child.String()})
-	// 		}
-	// 	}
-	// }
-
-	fmt.Println(tree)
-	genLinks := func() []charts.GraphLink {
-		// queue := []*trees.DecisionTreeNode{tree.Root}
-		links := make([]charts.GraphLink, 0)
-		// for len(queue) > 0 {
-		// 	curr := queue[0]
-		// 	queue = queue[1:]
-		// 	for _, child := range curr.Children {
-		// 		if child.SplitRule.SplitAttr != nil {
-		// 			queue = append(queue, child)
-		// 			links = append(links, charts.GraphLink{Source: curr.SplitRule.String(), Target: child.SplitRule.String()})
-		// 		}
-		// 	}
-		// }
-		links = append(links, charts.GraphLink{Source: tree.Root.SplitRule.String(), Target: "DecisionTreeRule(SepalWidthCm <= 3.050000)"})
-		links = append(links, charts.GraphLink{Source: "DecisionTreeRule(SepalWidthCm <= 3.050000)", Target: "Leaf 2"})
-		links = append(links, charts.GraphLink{Source: tree.Root.SplitRule.String(), Target: "Leaf 1"})
-		return links
-	}
-
-	graphCircle := func(nodes []charts.GraphNode) *charts.Graph {
-		graph := charts.NewGraph()
-		graph.SetGlobalOptions(charts.TitleOpts{Title: "Graph"})
-		graph.Add("graph", nodes, genLinks(),
-			charts.GraphOpts{Layout: "circular", Force: charts.GraphForce{Repulsion: 10000}},
-			charts.LabelTextOpts{Show: true, Position: "right"},
-			charts.LineStyleOpts{Curveness: -0.2},
-		)
-		return graph
-	}
-
-	graphHandler := func(w http.ResponseWriter, _ *http.Request) {
-		page := charts.NewPage(myRouter.RouterOpts)
-		page.Add(
-			graphCircle(graphNodes),
-		)
-		f, err := os.Create(getRenderPath("graph.html"))
-		if err != nil {
-			log.Println(err)
+	var d clusters.Observations
+	for row := 0; row < 150; row++ {
+		var temp = []float64{0, 0, 0, 0}
+		for i, col := range []string{"SepalLengthCm", "SepalWidthCm", "PetalLengthCm", "PetalWidthCm"} {
+			temp[i] = irisDF.Col(col).Float()[row]
 		}
-		page.Render(w, f)
+		d = append(d, clusters.Coordinates{temp[0], temp[1], temp[2], temp[3]})
 	}
 
-	http.HandleFunc("/", logTracing(graphHandler))
-	http.HandleFunc("/graph", logTracing(graphHandler))
-	log.Println("\nRun server at " + host)
-	http.ListenAndServe("127.0.0.1:8080", nil)
-}
+	km := kmeans.New()
+	scores, k, score, err := EstimateK(d, 8, km)
+	fmt.Print("\nOptimum no. of clusters: ", k, "\n")
+	fmt.Print("Best Silhouette score: ", score, "\n")
+	fmt.Print("Although optimum no. of clusters according to the analysis is 2, \n" +
+		"we know that 3 clusters is the corect response and its silhoette score is \n" +
+		"also greater than 0.7. This happens because k-means clustering does not always \n" +
+		"converge optimally.")
 
-func logTracing(next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		log.Printf("\n\nTracing request for %s\n", r.RequestURI)
-		next.ServeHTTP(w, r)
+	// pts will hold the values for plotting
+	pts := make(plotter.XYs, 8)
+
+	// Fill pts with data.
+	for i, floatVal := range scores {
+		pts[i].X = float64(floatVal.K)
+		pts[i].Y = floatVal.Score
+	}
+	// Create the plot.
+	p, err := plot.New()
+	if err != nil {
+		log.Fatal(err)
+	}
+	p.X.Label.Text = "No. of Clusters"
+	p.Y.Label.Text = "Silhouette Scores"
+	p.Add(plotter.NewGrid())
+	s, err := plotter.NewScatter(pts)
+	if err != nil {
+		log.Fatal(err)
+	}
+	s.GlyphStyle.Radius = vg.Points(3)
+
+	// Save the plot to a PNG file.
+	p.Add(s)
+	if err := p.Save(4*vg.Inch, 4*vg.Inch, "Task2/Silhouette Scores vs No. of Clusters.png"); err != nil {
+		log.Fatal(err)
 	}
 }
 
-func getRenderPath(f string) string {
-	return path.Join("html", f)
+// KScore holds the score for a value of K
+type KScore struct {
+	K     int
+	Score float64
 }
 
-const host = "http://127.0.0.1:8080"
-
-type router struct {
-	name string
-	charts.RouterOpts
+// Partitioner interface which suitable clustering algorithms should implement
+type Partitioner interface {
+	Partition(data clusters.Observations, k int) (clusters.Clusters, error)
 }
 
-var myRouter = router{"graph", charts.RouterOpts{URL: host + "/graph", Text: "Graph"}}
+// Score calculates the silhouette score for a given value of k, using the given
+// partitioning algorithm
+func Score(data clusters.Observations, k int, m Partitioner) (float64, error) {
+	cc, err := m.Partition(data, k)
+	if err != nil {
+		return -1.0, err
+	}
+
+	var si float64
+	var sc int64
+	for ci, c := range cc {
+		for _, p := range c.Observations {
+			ai := clusters.AverageDistance(p, c.Observations)
+			_, bi := cc.Neighbour(p, ci)
+
+			si += (bi - ai) / math.Max(ai, bi)
+			sc++
+		}
+	}
+
+	return si / float64(sc), nil
+}
+
+// Scores calculates the silhouette scores for all values of k between 2 and
+// kmax, using the given partitioning algorithm
+func silhouetteScores(data clusters.Observations, kmax int, m Partitioner) ([]KScore, error) {
+	var r []KScore
+
+	for k := 2; k <= kmax; k++ {
+		s, err := Score(data, k, m)
+		if err != nil {
+			return r, err
+		}
+
+		r = append(r, KScore{
+			K:     k,
+			Score: s,
+		})
+	}
+
+	return r, nil
+}
+
+// EstimateK estimates the amount of clusters (k) along with the silhouette
+// score for that value, using the given partitioning algorithm
+func EstimateK(data clusters.Observations, kmax int, m Partitioner) ([]KScore, int, float64, error) {
+	scores, err := silhouetteScores(data, kmax, m)
+	if err != nil {
+		return []KScore{}, 0, -1.0, err
+	}
+
+	r := KScore{
+		K: -1,
+	}
+	for _, score := range scores {
+		if r.K < 0 || score.Score > r.Score {
+			r = score
+		}
+	}
+	return scores, r.K, r.Score, nil
+}
