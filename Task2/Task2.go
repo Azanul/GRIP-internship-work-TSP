@@ -16,7 +16,7 @@ import (
 )
 
 func main() {
-	f, err := os.Open("Task1/student_scores - student_scores.csv")
+	f, err := os.Open("Task2/student_scores - student_scores.csv")
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -58,7 +58,7 @@ func main() {
 
 	// Save the plot to a PNG file.
 	p.Add(s)
-	if err := p.Save(4*vg.Inch, 4*vg.Inch, "Task1/Hours V Scores.png"); err != nil {
+	if err := p.Save(4*vg.Inch, 4*vg.Inch, "Task2/Hours V Scores.png"); err != nil {
 		log.Fatal(err)
 	}
 
@@ -175,7 +175,7 @@ func main() {
 	plotter.DefaultGlyphStyle.Radius = vg.Points(2)
 
 	p.Add(s, line)
-	if err := p.Save(4*vg.Inch, 4*vg.Inch, "Task1/Regression Line.png"); err != nil {
+	if err := p.Save(4*vg.Inch, 4*vg.Inch, "Task2/Regression Line.png"); err != nil {
 		log.Fatal(err)
 	}
 
